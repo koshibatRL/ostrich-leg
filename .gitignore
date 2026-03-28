@@ -1,7 +1,7 @@
 # Results (generated at runtime)
 results/checkpoints/
 results/metrics/
-results/videos/
+# results/videos/ — smoke test videos are tracked
 results/plots/
 
 # Python

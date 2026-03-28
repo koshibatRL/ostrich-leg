@@ -1,49 +1,51 @@
 # Bipedal Leg Platform - Docker Container for H200 Training
-# Based on Isaac Lab's recommended Docker setup
+# MJX (GPU-accelerated MuJoCo) + JAX PPO
 #
 # Build:  docker build -t bipedal-rl -f Dockerfile .
-# Run:    docker run --gpus '"device=0"' -it --rm -v $(pwd):/workspace -w /workspace bipedal-rl bash
+# Run:    docker run --gpus '"device=0"' -it --rm -v $(pwd):/workspace -w /workspace --shm-size=16g bipedal-rl bash
 
-FROM nvcr.io/nvidia/isaac-sim:4.5.0 AS base
-
-# Alternatively, if Isaac Lab pip install is preferred:
-# FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS base
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
+# Ensure JAX sees the GPU
+ENV XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    wget \
-    vim \
-    ffmpeg \
-    libgl1-mesa-glx \
-    && rm -rf /var/lib/apt/lists/*
+    python3 python3-pip python3-dev \
+    git wget vim ffmpeg \
+    libgl1-mesa-glx libglew-dev libosmesa6-dev \
+    libglfw3-dev patchelf \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
-# Python dependencies
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# Install JAX with CUDA first (order matters for compatibility)
+RUN pip install --no-cache-dir "jax[cuda12]>=0.4.20"
 
-# Clone and install legged_gym + rsl_rl (core training framework)
-WORKDIR /opt
-RUN git clone https://github.com/leggedrobotics/legged_gym.git && \
-    cd legged_gym && \
-    pip install -e .
+# Install MuJoCo + MJX
+RUN pip install --no-cache-dir "mujoco>=3.0.0" "mujoco-mjx>=3.0.0"
 
-RUN git clone https://github.com/leggedrobotics/rsl_rl.git && \
-    cd rsl_rl && \
-    pip install -e .
+# Install Flax, Optax, Distrax for PPO
+RUN pip install --no-cache-dir "flax>=0.8.0" "optax>=0.1.7" "distrax>=0.1.5"
 
-# Clone unitree_rl_gym for reference configs
-RUN git clone https://github.com/unitreerobotics/unitree_rl_gym.git
+# Install remaining dependencies
+RUN pip install --no-cache-dir \
+    "numpy>=1.24.0" "tensorboard>=2.14.0" "matplotlib>=3.7.0" \
+    "pyyaml>=6.0" "tqdm>=4.65.0" "imageio>=2.31.0" "imageio-ffmpeg>=0.4.8"
 
-# MuJoCo menagerie for reference robot models
-RUN git clone https://github.com/google-deepmind/mujoco_menagerie.git
+# SB3 fallback (CPU-based, for comparison/validation)
+RUN pip install --no-cache-dir "gymnasium>=1.0.0" "stable-baselines3>=2.3.0" "torch>=2.1.0"
 
 WORKDIR /workspace
 
 # Verify installation
-RUN python -c "import mujoco; import torch; print(f'MuJoCo {mujoco.__version__}, PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+RUN python -c "\
+import jax; \
+import mujoco; \
+from mujoco import mjx; \
+print(f'JAX {jax.__version__}, devices: {jax.devices()}'); \
+print(f'MuJoCo {mujoco.__version__}'); \
+print('MJX available: OK')"
 
 CMD ["bash"]
