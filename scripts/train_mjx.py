@@ -2,7 +2,7 @@
 GPU-accelerated training using MJX + JAX PPO.
 
 Usage:
-    python scripts/train_mjx.py --model A --phase 1 --num_envs 4096 --max_iterations 2000
+    python scripts/train_mjx.py --model A --phase 1 --num_envs 4096 --max_iterations 1000
 """
 
 import argparse
@@ -59,12 +59,13 @@ def train(args):
         json.dump(run_config, f, indent=2)
 
     print(f"{'=' * 60}")
-    print(f"  BIPEDAL LEG PLATFORM — MJX GPU Training")
+    print(f"  BIPEDAL LEG PLATFORM - MJX GPU Training")
     print(f"  Model:      {args.model} ({model_name})")
     print(f"  Phase:      {args.phase}")
     print(f"  Envs:       {args.num_envs}")
     print(f"  Iterations: {args.max_iterations}")
     print(f"  n_steps:    {args.n_steps}")
+    print(f"  decimation: {args.decimation}")
     print(f"  JAX devices: {jax.devices()}")
     print(f"  Log dir:    {log_dir}")
     print(f"{'=' * 60}")
@@ -76,6 +77,7 @@ def train(args):
         phase=args.phase,
         target_vel=1.0,
         episode_length_s=20.0,
+        decimation=args.decimation,
     )
 
     ppo_config = PPOConfig(
@@ -94,7 +96,9 @@ def train(args):
     print(f"[INFO] Total params: {sum(p.size for p in jax.tree.leaves(train_state.params)):,}")
     sys.stdout.flush()
 
-    # JIT compile each piece separately
+    # ============================================================
+    # JIT Compilation (warmup)
+    # ============================================================
     print("[INFO] JIT compiling env.reset...")
     sys.stdout.flush()
     t0 = time.time()
@@ -121,7 +125,7 @@ def train(args):
     print(f"[INFO] policy compiled in {time.time() - t0:.1f}s")
     sys.stdout.flush()
 
-    # JIT compile PPO update with dummy data
+    # JIT compile PPO update
     print("[INFO] JIT compiling PPO update...")
     sys.stdout.flush()
     t0 = time.time()
@@ -155,7 +159,7 @@ def train(args):
     reward_history = []
 
     for iteration in range(args.max_iterations):
-        # --- Collect rollout (step-level jit, not monolithic) ---
+        # --- Collect rollout ---
         rollout_obs = []
         rollout_actions = []
         rollout_rewards = []
@@ -196,7 +200,6 @@ def train(args):
         )
 
         # Flatten
-        batch_size = ppo_config.n_steps * env.num_envs
         batch = (
             t_obs.reshape(batch_size, -1),
             t_actions.reshape(batch_size, -1),
@@ -232,31 +235,25 @@ def train(args):
             sys.stdout.flush()
 
         if (iteration + 1) % args.save_interval == 0:
-            ckpt_path = os.path.join(log_dir, f"ckpt_{iteration + 1}.npz")
-            params_flat = jax.tree.map(lambda x: np.array(x), train_state.params)
-            np.savez(ckpt_path, **{
-                str(i): v for i, v in enumerate(jax.tree.leaves(params_flat))
-            })
-            print(f"  [SAVED] {ckpt_path}")
-            sys.stdout.flush()
+            save_checkpoint(train_state, log_dir, iteration + 1)
 
         if mean_reward > best_reward:
             best_reward = mean_reward
 
+    # ============================================================
     # Final save
+    # ============================================================
     jax.block_until_ready(train_state.params)
     elapsed = time.time() - start_time
     total_fps = total_steps / max(elapsed, 1)
 
-    final_path = os.path.join(log_dir, "final.npz")
-    params_flat = jax.tree.map(lambda x: np.array(x), train_state.params)
-    np.savez(final_path, **{
-        str(i): v for i, v in enumerate(jax.tree.leaves(params_flat))
-    })
+    save_checkpoint(train_state, log_dir, "final")
 
     summary = {
         "model": args.model,
+        "model_name": model_name,
         "phase": args.phase,
+        "decimation": args.decimation,
         "total_iterations": args.max_iterations,
         "total_steps": total_steps,
         "elapsed_s": elapsed,
@@ -266,6 +263,9 @@ def train(args):
     }
     with open(os.path.join(log_dir, "training_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
+
+    with open(os.path.join(log_dir, "reward_history.json"), "w") as f:
+        json.dump(reward_history, f)
 
     print(f"\n{'=' * 60}")
     print(f"  TRAINING COMPLETE")
@@ -278,17 +278,35 @@ def train(args):
     print(f"{'=' * 60}")
 
 
+def save_checkpoint(train_state, log_dir, label):
+    """Save params as .npz with tree structure info."""
+    ckpt_path = os.path.join(log_dir, f"ckpt_{label}.npz")
+
+    # Flatten params to numpy arrays
+    leaves = jax.tree.leaves(train_state.params)
+    params_dict = {str(i): np.array(v) for i, v in enumerate(leaves)}
+
+    # Save tree structure for reconstruction
+    tree_def = jax.tree.structure(train_state.params)
+    params_dict["_tree_def_str"] = np.array(str(tree_def))
+
+    np.savez(ckpt_path, **params_dict)
+    print(f"  [SAVED] {ckpt_path}")
+    sys.stdout.flush()
+
+
 def main():
     parser = argparse.ArgumentParser(description="MJX GPU Training")
     parser.add_argument("--model", type=str, required=True, choices=["A", "B", "C"])
     parser.add_argument("--phase", type=int, default=1, choices=[1, 2])
     parser.add_argument("--num_envs", type=int, default=4096)
-    parser.add_argument("--max_iterations", type=int, default=2000)
+    parser.add_argument("--max_iterations", type=int, default=1000)
     parser.add_argument("--n_steps", type=int, default=64)
     parser.add_argument("--n_minibatches", type=int, default=4)
+    parser.add_argument("--decimation", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--log_interval", type=int, default=50)
-    parser.add_argument("--save_interval", type=int, default=500)
+    parser.add_argument("--log_interval", type=int, default=10)
+    parser.add_argument("--save_interval", type=int, default=200)
 
     args = parser.parse_args()
     train(args)

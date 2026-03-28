@@ -41,6 +41,7 @@ class BipedalMJXEnv:
         target_vel: float = 1.0,
         target_height: float = 0.85,
         episode_length_s: float = 20.0,
+        decimation: int = 2,
     ):
         # Load MuJoCo model and convert to MJX
         self.mj_model = mujoco.MjModel.from_xml_path(model_xml)
@@ -52,7 +53,7 @@ class BipedalMJXEnv:
         self.phase = phase
 
         self.dt = self.mj_model.opt.timestep
-        self.decimation = 4
+        self.decimation = decimation
         self.policy_dt = self.dt * self.decimation
 
         self.nu = self.mj_model.nu
@@ -68,7 +69,7 @@ class BipedalMJXEnv:
         # Observation dimension
         self.obs_dim = 3 + 3 + 3 + self.nq_joints + self.nv_joints + self.nu
 
-        # Get default qpos
+        # Get default qpos via CPU MuJoCo
         mj_data = mujoco.MjData(self.mj_model)
         mujoco.mj_resetData(self.mj_model, mj_data)
         mj_data.qpos[2] = target_height
@@ -77,7 +78,7 @@ class BipedalMJXEnv:
         self.default_qvel = jnp.zeros(self.nv)
         self.default_joint_pos = self.default_qpos[self.nq_free:]
 
-        # Store a single MJX data template for resetting
+        # Store MJX data template (with correct derived quantities from forward)
         self._mjx_data_template = mjx.put_data(self.mj_model, mj_data)
 
         # Joint ranges for limit penalty
@@ -104,13 +105,12 @@ class BipedalMJXEnv:
             self.w_joint_limit = -10.0
 
     def _reset_single(self, rng):
-        """Reset a single environment. Returns (mjx_data, rng)."""
+        """Reset a single environment with full forward pass."""
         rng, k1, k2, k3 = random.split(rng, 4)
 
         qpos = self.default_qpos.copy()
         qvel = self.default_qvel.copy()
 
-        # Add noise
         joint_noise = random.uniform(k1, shape=(self.nq_joints,), minval=-0.02, maxval=0.02)
         height_noise = random.uniform(k2, shape=(), minval=-0.01, maxval=0.01)
         vel_noise = random.uniform(k3, shape=(self.nv_joints,), minval=-0.1, maxval=0.1)
@@ -121,14 +121,32 @@ class BipedalMJXEnv:
 
         data = self._mjx_data_template.replace(qpos=qpos, qvel=qvel)
         data = mjx.forward(self.mjx_model, data)
-
         return data, rng
+
+    def _cheap_reset_single(self, data, rng):
+        """Cheap reset: replace qpos/qvel only (no mjx.forward)."""
+        rng, k1, k2, k3 = random.split(rng, 4)
+
+        qpos = self.default_qpos.copy()
+        qvel = self.default_qvel.copy()
+
+        joint_noise = random.uniform(k1, shape=(self.nq_joints,), minval=-0.02, maxval=0.02)
+        height_noise = random.uniform(k2, shape=(), minval=-0.01, maxval=0.01)
+        vel_noise = random.uniform(k3, shape=(self.nv_joints,), minval=-0.1, maxval=0.1)
+
+        qpos = qpos.at[self.nq_free:].add(joint_noise)
+        qpos = qpos.at[2].add(height_noise)
+        qvel = qvel.at[self.nv_free:].add(vel_noise)
+
+        new_data = data.replace(
+            qpos=qpos, qvel=qvel, ctrl=jnp.zeros(self.nu),
+        )
+        return new_data, rng
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng):
-        """Reset all environments. Returns (state, obs)."""
+        """Reset all environments (full forward pass). Returns (state, obs)."""
         rngs = random.split(rng, self.num_envs)
-
         mjx_datas, new_rngs = jax.vmap(self._reset_single)(rngs)
 
         state = EnvState(
@@ -142,22 +160,12 @@ class BipedalMJXEnv:
         obs = self._get_obs(state)
         return state, obs
 
-    def _step_single(self, mjx_model, data, action):
-        """Simulate decimation steps for a single env."""
-        data = data.replace(ctrl=action)
-
-        def body_fn(data, _):
-            return mjx.step(mjx_model, data), None
-
-        data, _ = jax.lax.scan(body_fn, data, None, length=self.decimation)
-        return data
-
     @partial(jax.jit, static_argnums=(0,))
     def step(self, state, actions):
-        """Step all environments. Returns (new_state, obs, reward, done, info)."""
+        """Step all environments with cheap auto-reset."""
         actions = jnp.clip(actions, -1.0, 1.0)
 
-        # Step physics (vmapped over envs)
+        # Step physics
         mjx_datas = jax.vmap(
             lambda d, a: self._step_single(self.mjx_model, d, a)
         )(state.mjx_data, actions)
@@ -177,13 +185,14 @@ class BipedalMJXEnv:
         truncated = new_step_count >= self.max_episode_steps
         done = terminated | truncated
 
-        # Auto-reset done environments
+        # Cheap auto-reset (no mjx.forward)
         new_rngs = jax.vmap(lambda k: random.split(k)[0])(state.rng)
         reset_rngs = jax.vmap(lambda k: random.split(k)[1])(state.rng)
 
-        reset_datas, reset_rngs_out = jax.vmap(self._reset_single)(reset_rngs)
+        reset_datas, reset_rngs_out = jax.vmap(
+            lambda d, k: self._cheap_reset_single(d, k)
+        )(mjx_datas, reset_rngs)
 
-        # Where done, use reset data; else keep stepped data
         new_mjx_datas = jax.tree.map(
             lambda reset, stepped: jnp.where(
                 done.reshape(-1, *([1] * (reset.ndim - 1))),
@@ -215,6 +224,16 @@ class BipedalMJXEnv:
 
         return new_state, obs, reward, done, info
 
+    def _step_single(self, mjx_model, data, action):
+        """Simulate decimation steps for a single env."""
+        data = data.replace(ctrl=action)
+
+        def body_fn(data, _):
+            return mjx.step(mjx_model, data), None
+
+        data, _ = jax.lax.scan(body_fn, data, None, length=self.decimation)
+        return data
+
     def _get_obs(self, state):
         """Extract observation from state. (num_envs, obs_dim)"""
         data = state.mjx_data
@@ -241,37 +260,29 @@ class BipedalMJXEnv:
 
     def _compute_reward_batched(self, data, actions, prev_actions):
         """Vectorized reward computation. Returns (num_envs,)."""
-        # Forward velocity
         vel_x = data.qvel[:, 0]
         vel_error = vel_x - self.target_vel
         r_forward_vel = jnp.exp(-4.0 * vel_error ** 2)
 
-        # Alive
         r_alive = jnp.ones(self.num_envs)
 
-        # Torso upright
         quat = data.qpos[:, 3:7]
         up_vec = jax.vmap(self._quat_to_up)(quat)
         r_torso_upright = (up_vec[:, 2] + 1.0) / 2.0
 
-        # Energy
         torques = data.actuator_force
         joint_vels = data.qvel[:, self.nv_free:self.nv_free + self.nu]
         p_energy = jnp.sum(jnp.abs(torques * joint_vels), axis=-1)
 
-        # Joint acceleration
         joint_acc = data.qacc[:, self.nv_free:]
         p_joint_acc = jnp.sum(joint_acc ** 2, axis=-1)
 
-        # Torso height variation
         height_error = data.qpos[:, 2] - self.target_height
         p_torso_height_var = height_error ** 2
 
-        # Action rate
         action_diff = actions - prev_actions
         p_action_rate = jnp.sum(action_diff ** 2, axis=-1)
 
-        # Joint limit penalty
         jnt_pos = data.qpos[:, self.nq_free:]
         margin = 0.1
         lo = self.jnt_range[:, 0]
@@ -280,7 +291,6 @@ class BipedalMJXEnv:
         above = jnp.sum(jnp.clip(jnt_pos - (hi - margin), 0, None) ** 2, axis=-1)
         p_joint_limit = below + above
 
-        # Weighted sum
         reward = (
             self.w_forward_vel * r_forward_vel
             + self.w_alive * r_alive

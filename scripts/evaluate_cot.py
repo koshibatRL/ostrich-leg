@@ -42,6 +42,28 @@ MODEL_CONFIGS = {
     },
 }
 
+MODEL_NAME_MAP = {
+    "A": "forward_knee",
+    "B": "reverse_knee",
+    "C": "bidirectional_knee",
+}
+
+
+def _find_checkpoint(checkpoint_dir, model_key):
+    """Find the latest checkpoint for a given model key."""
+    import glob
+    name = MODEL_NAME_MAP[model_key]
+    # Look for directories matching the model name
+    pattern = os.path.join(checkpoint_dir, f"{name}_*", "ckpt_final.npz")
+    matches = sorted(glob.glob(pattern))
+    if matches:
+        return matches[-1]  # Latest
+    # Also try direct path
+    direct = os.path.join(checkpoint_dir, f"{name}_ckpt_final.npz")
+    if os.path.exists(direct):
+        return direct
+    return None
+
 
 def evaluate_cot(model_xml, policy=None, duration_s=30.0,
                  target_vel=1.0, num_episodes=10, payload_mass=0.0):
@@ -63,8 +85,19 @@ def evaluate_cot(model_xml, policy=None, duration_s=30.0,
     data = mujoco.MjData(model)
 
     dt = model.opt.timestep
-    total_steps = int(duration_s / dt)
+    decimation = 4  # match training env
+    policy_dt = dt * decimation
+    total_policy_steps = int(duration_s / policy_dt)
     total_mass = sum(model.body_mass) + payload_mass
+
+    nq_free = 7
+    nu = model.nu
+
+    # Get default joint positions
+    mujoco.mj_resetData(model, data)
+    data.qpos[2] = 0.85
+    mujoco.mj_forward(model, data)
+    default_joint_pos = data.qpos[nq_free:].copy()
 
     # Add payload mass to torso if specified
     if payload_mass > 0:
@@ -78,32 +111,33 @@ def evaluate_cot(model_xml, policy=None, duration_s=30.0,
 
     for ep in range(num_episodes):
         mujoco.mj_resetData(model, data)
-
-        # Add small random perturbation
-        data.qpos[:3] = [0, 0, 0.85]  # x, y, z
+        data.qpos[2] = 0.85
         data.qpos[2] += np.random.uniform(-0.01, 0.01)
+        mujoco.mj_forward(model, data)
 
         energy_sum = 0.0
         initial_x = data.qpos[0]
+        prev_actions = np.zeros(nu, dtype=np.float32)
 
-        for step in range(total_steps):
+        for step in range(total_policy_steps):
             # Get action from policy (or zero for passive test)
             if policy is not None:
-                obs = _get_obs(model, data)
+                obs = _get_obs(model, data, default_joint_pos, nu, prev_actions)
                 action = policy(obs)
                 data.ctrl[:] = action
+                prev_actions = action.copy()
             else:
                 data.ctrl[:] = 0.0
 
-            # Step physics
-            mujoco.mj_step(model, data)
+            # Step physics with decimation
+            for _ in range(decimation):
+                mujoco.mj_step(model, data)
 
             # Accumulate energy: sum(|torque * velocity|) * dt
             torques = data.actuator_force.copy()
-            # Get joint velocities for actuated joints
-            joint_vels = data.qvel[6:]  # Skip freejoint DOFs (3 pos + 3 rot)
+            joint_vels = data.qvel[6:]
             power = np.sum(np.abs(torques * joint_vels[:len(torques)]))
-            energy_sum += power * dt
+            energy_sum += power * policy_dt
 
             # Check termination
             torso_z = data.qpos[2]
@@ -113,7 +147,7 @@ def evaluate_cot(model_xml, policy=None, duration_s=30.0,
         # Compute metrics
         final_x = data.qpos[0]
         distance = final_x - initial_x
-        elapsed = step * dt
+        elapsed = step * policy_dt
 
         if distance > 0.1:  # Only count if robot actually moved
             cot = energy_sum / (total_mass * 9.81 * distance)
@@ -141,13 +175,12 @@ def evaluate_cot(model_xml, policy=None, duration_s=30.0,
     return results
 
 
-def _get_obs(model, data):
-    """Extract observation vector from MuJoCo data."""
-    obs = np.concatenate([
-        data.qpos[7:].copy(),           # Joint positions (skip freejoint)
-        data.qvel[6:].copy(),           # Joint velocities (skip freejoint)
-        data.sensordata.copy(),          # Sensor data (IMU, contacts)
-    ])
+def _get_obs(model, data, default_joint_pos, nu, prev_actions):
+    """Extract observation matching BipedalWalkEnv/BipedalMJXEnv format."""
+    from load_mjx_policy import get_obs_from_mujoco
+    obs = get_obs_from_mujoco(model, data, default_joint_pos, nu)
+    # Replace zero prev_actions with actual
+    obs[-nu:] = prev_actions
     return obs
 
 
@@ -155,7 +188,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate Cost of Transport")
     parser.add_argument("--all_models", action="store_true", help="Evaluate all 3 models")
     parser.add_argument("--model", type=str, choices=["A", "B", "C"], help="Single model to evaluate")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Path to trained policy checkpoint")
+    parser.add_argument("--checkpoint_dir", type=str, default=None, help="Dir with ckpt_final.npz for each model")
     parser.add_argument("--duration", type=float, default=30.0, help="Episode duration (seconds)")
     parser.add_argument("--num_episodes", type=int, default=100, help="Number of episodes")
     parser.add_argument("--payload", type=float, default=0.0, help="Payload mass (kg)")
@@ -176,13 +209,18 @@ def main():
         print(f"  Payload: {args.payload}kg")
         print(f"{'='*60}")
 
-        # TODO: Load trained policy from checkpoint
-        # For now, running passive (zero-action) test
-        # This still shows structural CoT differences from springs
         policy = None
-        if args.checkpoint:
-            print(f"  [TODO] Load policy from {args.checkpoint}")
-            # policy = load_policy(args.checkpoint)
+        if args.checkpoint_dir:
+            from load_mjx_policy import load_mjx_policy
+            # Find checkpoint for this model
+            ckpt = _find_checkpoint(args.checkpoint_dir, model_key)
+            if ckpt:
+                m = mujoco.MjModel.from_xml_path(config["xml"])
+                obs_dim = 3 + 3 + 3 + (m.nq - 7) + (m.nv - 6) + m.nu
+                policy = load_mjx_policy(ckpt, obs_dim, m.nu)
+                print(f"  Loaded policy: {ckpt}")
+            else:
+                print(f"  [WARN] No checkpoint found for model {model_key}")
 
         results = evaluate_cot(
             model_xml=config["xml"],
