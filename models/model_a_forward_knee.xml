@@ -69,7 +69,7 @@
 
               <!-- KNEE: Forward bending (conventional) -->
               <body name="r_knee_link" pos="0 0 -0.3">
-                <joint name="r_knee" type="hinge" axis="0 1 0" range="-120 0"
+                <joint name="r_knee" type="hinge" axis="0 1 0" range="0 120"
                        damping="1.5"/>
                 <geom type="sphere" size="0.035" material="joint_mat"/>
 
@@ -126,7 +126,7 @@
                     size="0.04" mass="3.0" material="body_mat"/>
 
               <body name="l_knee_link" pos="0 0 -0.3">
-                <joint name="l_knee" type="hinge" axis="0 1 0" range="-120 0"
+                <joint name="l_knee" type="hinge" axis="0 1 0" range="0 120"
                        damping="1.5"/>
                 <geom type="sphere" size="0.035" material="joint_mat"/>
 
