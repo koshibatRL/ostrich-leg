@@ -1,0 +1,16 @@
+# Bipedal Leg Platform - Python Dependencies
+# Install inside Docker container only
+
+torch>=2.1.0
+mujoco>=3.0.0
+numpy>=1.24.0
+gymnasium>=1.0.0
+tensorboard>=2.14.0
+matplotlib>=3.7.0
+pyyaml>=6.0
+tqdm>=4.65.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.8
+
+# Isaac Gym / Isaac Lab dependencies are handled by the base Docker image
+# legged_gym and rsl_rl are installed from source in Dockerfile

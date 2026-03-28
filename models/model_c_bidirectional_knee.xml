@@ -1,0 +1,210 @@
+<mujoco model="bidirectional_knee_biped">
+  <!-- ============================================================
+       MODEL C: Bidirectional Knee Bipedal Platform (PROPOSED DESIGN)
+       - Knee bends BOTH forward and backward
+       - Walking mode: reverse knee (ostrich-like, efficient)
+       - Task mode: forward knee (human-like, for squatting etc.)
+       - NO dedicated knee motor — spring-loaded with bidirectional support
+       - Toe spring (SEA) for elastic energy storage
+       - Total actuators: 10 (5 per leg)
+       - RL discovers when to use which direction
+       ============================================================ -->
+
+  <compiler angle="degree" inertiafromgeom="true"/>
+
+  <option timestep="0.002" integrator="RK4" gravity="0 0 -9.81">
+    <flag warmstart="enable"/>
+  </option>
+
+  <default>
+    <joint limited="true" damping="0.5" armature="0.01"/>
+    <geom contype="1" conaffinity="1" condim="3" friction="1.0 0.005 0.0001"
+          density="1000" margin="0.001"/>
+    <motor ctrllimited="true" ctrlrange="-1 1"/>
+  </default>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge"
+             rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2" markrgb="0.8 0.8 0.8"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texrepeat="5 5" texuniform="true" reflectance="0.2"/>
+    <material name="body_mat" rgba="0.2 0.2 0.2 1"/>
+    <material name="joint_mat" rgba="0.1 0.7 0.9 1"/>
+    <material name="foot_mat" rgba="0.3 0.3 0.3 1"/>
+    <material name="spring_mat" rgba="0.0 0.9 0.4 1"/>
+    <material name="bidir_mat" rgba="0.9 0.1 0.9 1"/>
+  </asset>
+
+  <worldbody>
+    <light directional="true" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2" pos="0 0 4" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="50 50 0.1" material="groundplane"/>
+
+    <!-- ======== TORSO (payload platform) — same mass ======== -->
+    <body name="torso" pos="0 0 0.85">
+      <freejoint name="root"/>
+      <geom name="torso_geom" type="box" size="0.15 0.1 0.1" mass="10.0" material="body_mat"/>
+
+      <site name="imu_site" pos="0 0 0" size="0.01"/>
+      <site name="payload_mount" pos="0 0 0.1" size="0.02" rgba="1 0 0 0.5"/>
+
+      <!-- ======== RIGHT LEG (Bidirectional Knee) ======== -->
+      <body name="r_hip_yaw_link" pos="0 -0.1 0">
+        <joint name="r_hip_yaw" type="hinge" axis="0 0 1" range="-45 45" damping="2.0"/>
+        <geom type="sphere" size="0.04" material="joint_mat"/>
+
+        <body name="r_hip_roll_link" pos="0 0 0">
+          <joint name="r_hip_roll" type="hinge" axis="1 0 0" range="-30 30" damping="2.0"/>
+          <geom type="sphere" size="0.035" material="joint_mat"/>
+
+          <body name="r_hip_pitch_link" pos="0 0 0">
+            <joint name="r_hip_pitch" type="hinge" axis="0 1 0" range="-60 60" damping="2.0"/>
+            <geom type="sphere" size="0.035" material="joint_mat"/>
+
+            <!-- Upper leg — proximal mass concentration -->
+            <body name="r_thigh" pos="0 0 -0.02">
+              <geom name="r_thigh_geom" type="capsule" fromto="0 0 0 0 0 -0.3"
+                    size="0.045" mass="3.8" material="body_mat"/>
+
+              <!-- BIDIRECTIONAL KNEE: bends both ways!
+                   range="-90 120": negative=forward(human), positive=backward(ostrich)
+                   Spring centered near extension (springref=5)
+                   NO motor — RL uses hip to control knee indirectly
+                   The spring provides:
+                     - Self-recovery toward extension (tensegrity analog)
+                     - Energy storage during both flex directions
+                     - Passive locking near full extension -->
+              <body name="r_knee_link" pos="0 0 -0.3">
+                <joint name="r_knee" type="hinge" axis="0 1 0"
+                       range="-90 120"
+                       damping="1.2"
+                       stiffness="35"
+                       springref="5"/>
+                <geom type="sphere" size="0.04" material="bidir_mat"/>
+
+                <!-- Lower leg — lightweight -->
+                <body name="r_shin" pos="0 0 -0.02">
+                  <geom name="r_shin_geom" type="capsule" fromto="0 0 0 0 0 -0.28"
+                        size="0.03" mass="1.2" material="body_mat"/>
+
+                  <!-- ANKLE -->
+                  <body name="r_ankle_link" pos="0 0 -0.28">
+                    <joint name="r_ankle_pitch" type="hinge" axis="0 1 0" range="-45 45"
+                           damping="1.0"/>
+                    <geom type="sphere" size="0.03" material="joint_mat"/>
+
+                    <!-- Foot — hybrid design (works in both knee directions) -->
+                    <body name="r_foot" pos="0 0 -0.02">
+                      <geom name="r_foot_base" type="box" size="0.06 0.04 0.012"
+                            pos="0 0 0" mass="0.3" material="foot_mat"/>
+
+                      <!-- TOE with SEA spring (elastic energy storage) -->
+                      <body name="r_toe" pos="0.06 0 0">
+                        <joint name="r_toe_joint" type="hinge" axis="0 1 0"
+                               range="-30 60"
+                               stiffness="25"
+                               springref="0"
+                               damping="0.3"/>
+                        <geom name="r_toe_geom" type="capsule" fromto="0 0 0 0.04 0 -0.005"
+                              size="0.018" mass="0.15" material="spring_mat"/>
+                        <site name="r_toe_tip" pos="0.04 0 -0.005" size="0.01"/>
+                      </body>
+
+                      <!-- Heel contact -->
+                      <site name="r_heel" pos="-0.05 0 -0.012" size="0.01"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ======== LEFT LEG (mirror) ======== -->
+      <body name="l_hip_yaw_link" pos="0 0.1 0">
+        <joint name="l_hip_yaw" type="hinge" axis="0 0 1" range="-45 45" damping="2.0"/>
+        <geom type="sphere" size="0.04" material="joint_mat"/>
+
+        <body name="l_hip_roll_link" pos="0 0 0">
+          <joint name="l_hip_roll" type="hinge" axis="1 0 0" range="-30 30" damping="2.0"/>
+          <geom type="sphere" size="0.035" material="joint_mat"/>
+
+          <body name="l_hip_pitch_link" pos="0 0 0">
+            <joint name="l_hip_pitch" type="hinge" axis="0 1 0" range="-60 60" damping="2.0"/>
+            <geom type="sphere" size="0.035" material="joint_mat"/>
+
+            <body name="l_thigh" pos="0 0 -0.02">
+              <geom name="l_thigh_geom" type="capsule" fromto="0 0 0 0 0 -0.3"
+                    size="0.045" mass="3.8" material="body_mat"/>
+
+              <body name="l_knee_link" pos="0 0 -0.3">
+                <joint name="l_knee" type="hinge" axis="0 1 0"
+                       range="-90 120"
+                       damping="1.2"
+                       stiffness="35"
+                       springref="5"/>
+                <geom type="sphere" size="0.04" material="bidir_mat"/>
+
+                <body name="l_shin" pos="0 0 -0.02">
+                  <geom name="l_shin_geom" type="capsule" fromto="0 0 0 0 0 -0.28"
+                        size="0.03" mass="1.2" material="body_mat"/>
+
+                  <body name="l_ankle_link" pos="0 0 -0.28">
+                    <joint name="l_ankle_pitch" type="hinge" axis="0 1 0" range="-45 45"
+                           damping="1.0"/>
+                    <geom type="sphere" size="0.03" material="joint_mat"/>
+
+                    <body name="l_foot" pos="0 0 -0.02">
+                      <geom name="l_foot_base" type="box" size="0.06 0.04 0.012"
+                            pos="0 0 0" mass="0.3" material="foot_mat"/>
+
+                      <body name="l_toe" pos="0.06 0 0">
+                        <joint name="l_toe_joint" type="hinge" axis="0 1 0"
+                               range="-30 60"
+                               stiffness="25"
+                               springref="0"
+                               damping="0.3"/>
+                        <geom name="l_toe_geom" type="capsule" fromto="0 0 0 0.04 0 -0.005"
+                              size="0.018" mass="0.15" material="spring_mat"/>
+                        <site name="l_toe_tip" pos="0.04 0 -0.005" size="0.01"/>
+                      </body>
+
+                      <site name="l_heel" pos="-0.05 0 -0.012" size="0.01"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- ======== ACTUATORS (10 total: 5 per leg — NO knee motor!) ======== -->
+  <actuator>
+    <!-- Right leg -->
+    <motor name="r_hip_yaw_act"     joint="r_hip_yaw"      gear="80"  ctrlrange="-1 1"/>
+    <motor name="r_hip_roll_act"    joint="r_hip_roll"     gear="80"  ctrlrange="-1 1"/>
+    <motor name="r_hip_pitch_act"   joint="r_hip_pitch"    gear="120" ctrlrange="-1 1"/>
+    <motor name="r_ankle_pitch_act" joint="r_ankle_pitch"  gear="60"  ctrlrange="-1 1"/>
+    <motor name="r_toe_act"         joint="r_toe_joint"    gear="30"  ctrlrange="-1 1"/>
+    <!-- Left leg -->
+    <motor name="l_hip_yaw_act"     joint="l_hip_yaw"      gear="80"  ctrlrange="-1 1"/>
+    <motor name="l_hip_roll_act"    joint="l_hip_roll"     gear="80"  ctrlrange="-1 1"/>
+    <motor name="l_hip_pitch_act"   joint="l_hip_pitch"    gear="120" ctrlrange="-1 1"/>
+    <motor name="l_ankle_pitch_act" joint="l_ankle_pitch"  gear="60"  ctrlrange="-1 1"/>
+    <motor name="l_toe_act"         joint="l_toe_joint"    gear="30"  ctrlrange="-1 1"/>
+  </actuator>
+
+  <sensor>
+    <accelerometer name="imu_acc" site="imu_site"/>
+    <gyro name="imu_gyro" site="imu_site"/>
+    <framequat name="torso_quat" objtype="site" objname="imu_site"/>
+    <touch name="r_heel_touch" site="r_heel"/>
+    <touch name="r_toe_touch" site="r_toe_tip"/>
+    <touch name="l_heel_touch" site="l_heel"/>
+    <touch name="l_toe_touch" site="l_toe_tip"/>
+  </sensor>
+</mujoco>
