@@ -40,7 +40,7 @@ def render_video(model_xml, policy, output_path, duration_s=10.0, fps=30):
 
     nq_free = 7
     nu = m.nu
-    decimation = 4
+    decimation = 2  # must match training
 
     # Default state
     mujoco.mj_resetData(m, d)

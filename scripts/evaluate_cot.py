@@ -85,7 +85,7 @@ def evaluate_cot(model_xml, policy=None, duration_s=30.0,
     data = mujoco.MjData(model)
 
     dt = model.opt.timestep
-    decimation = 4  # match training env
+    decimation = 2  # match training env
     policy_dt = dt * decimation
     total_policy_steps = int(duration_s / policy_dt)
     total_mass = sum(model.body_mass) + payload_mass

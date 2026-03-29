@@ -2,15 +2,16 @@
 Evaluate payload tolerance and external disturbance robustness.
 
 Usage:
-    python evaluate_payload.py --all_models --masses 5 10 20
-    python evaluate_robustness.py --all_models --forces 50 100 150
-
-This script runs both payload and robustness tests and generates comparison data.
+    python evaluate_payload_robustness.py --all_models --checkpoint_dir results/checkpoints
 """
 
 import argparse
 import os
+import sys
 import json
+import glob
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 
@@ -20,6 +21,8 @@ except ImportError:
     print("[ERROR] MuJoCo not installed.")
     exit(1)
 
+from load_mjx_policy import load_mjx_policy, get_obs_from_mujoco
+
 
 MODEL_CONFIGS = {
     "A": {"xml": "models/model_a_forward_knee.xml", "name": "Forward Knee (Baseline)"},
@@ -27,53 +30,51 @@ MODEL_CONFIGS = {
     "C": {"xml": "models/model_c_bidirectional_knee.xml", "name": "Bidirectional Knee (Proposed)"},
 }
 
+MODEL_NAME_MAP = {
+    "A": "forward_knee",
+    "B": "reverse_knee",
+    "C": "bidirectional_knee",
+}
 
-def load_policy(checkpoint_path):
-    """Load trained policy. Returns callable or None."""
-    if checkpoint_path is None:
-        return None
-    try:
-        ext = os.path.splitext(checkpoint_path)[1]
-        if ext == ".zip":
-            from stable_baselines3 import PPO
-            model = PPO.load(checkpoint_path)
-            def policy(obs):
-                action, _ = model.predict(obs, deterministic=True)
-                return action
-            return policy
-    except Exception as e:
-        print(f"[WARN] Could not load policy: {e}")
-    return None
+DECIMATION = 2  # must match training
 
 
-def _get_obs(model, data):
-    return np.concatenate([
-        data.qpos[7:].copy(),
-        data.qvel[6:].copy(),
-        data.sensordata.copy(),
-    ])
+def _find_checkpoint(checkpoint_dir, model_key):
+    name = MODEL_NAME_MAP[model_key]
+    pattern = os.path.join(checkpoint_dir, f"{name}_*", "ckpt_final.npz")
+    matches = sorted(glob.glob(pattern))
+    return matches[-1] if matches else None
+
+
+def _make_obs(model, data, default_joint_pos, nu, prev_actions):
+    obs = get_obs_from_mujoco(model, data, default_joint_pos, nu)
+    obs[-nu:] = prev_actions
+    return obs
 
 
 def evaluate_payload(model_xml, policy=None, masses=[0, 5, 10, 20],
-                     duration_s=20.0, num_trials=20, target_vel=1.0):
-    """
-    Test walking stability with different payload masses on torso.
-
-    Returns: dict with results per mass level
-    """
+                     duration_s=20.0, num_trials=20):
     results = {}
 
     for mass in masses:
         model = mujoco.MjModel.from_xml_path(model_xml)
         data = mujoco.MjData(model)
+        nu = model.nu
+        nq_free = 7
+
+        # Default joint pos
+        mujoco.mj_resetData(model, data)
+        data.qpos[2] = 0.85
+        mujoco.mj_forward(model, data)
+        default_joint_pos = data.qpos[nq_free:].copy()
 
         if mass > 0:
             torso_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso")
             model.body_mass[torso_id] += mass
 
         total_mass = sum(model.body_mass)
-        dt = model.opt.timestep
-        total_steps = int(duration_s / dt)
+        policy_dt = model.opt.timestep * DECIMATION
+        total_policy_steps = int(duration_s / policy_dt)
 
         successes = 0
         distances = []
@@ -83,25 +84,29 @@ def evaluate_payload(model_xml, policy=None, masses=[0, 5, 10, 20],
             mujoco.mj_resetData(model, data)
             data.qpos[2] = 0.85
             data.qpos[:2] += np.random.uniform(-0.01, 0.01, 2)
+            mujoco.mj_forward(model, data)
 
             energy_sum = 0.0
             initial_x = data.qpos[0]
             survived = True
+            prev_actions = np.zeros(nu, dtype=np.float32)
 
-            for step in range(total_steps):
+            for step in range(total_policy_steps):
                 if policy is not None:
-                    obs = _get_obs(model, data)
+                    obs = _make_obs(model, data, default_joint_pos, nu, prev_actions)
                     action = policy(obs)
-                    data.ctrl[:len(action)] = action
+                    data.ctrl[:] = action
+                    prev_actions = action.copy()
                 else:
                     data.ctrl[:] = 0.0
 
-                mujoco.mj_step(model, data)
+                for _ in range(DECIMATION):
+                    mujoco.mj_step(model, data)
 
                 torques = data.actuator_force
                 joint_vels = data.qvel[6:]
                 power = np.sum(np.abs(torques * joint_vels[:len(torques)]))
-                energy_sum += power * dt
+                energy_sum += power * policy_dt
 
                 if data.qpos[2] < 0.3:
                     survived = False
@@ -132,66 +137,65 @@ def evaluate_payload(model_xml, policy=None, masses=[0, 5, 10, 20],
 def evaluate_robustness(model_xml, policy=None, forces=[50, 100, 150],
                         push_duration=0.1, num_trials=30, push_time=3.0,
                         episode_duration=10.0):
-    """
-    Test recovery from lateral pushes during walking.
-
-    Returns: dict with results per force level
-    """
     model = mujoco.MjModel.from_xml_path(model_xml)
     data = mujoco.MjData(model)
+    nu = model.nu
+    nq_free = 7
 
-    dt = model.opt.timestep
+    mujoco.mj_resetData(model, data)
+    data.qpos[2] = 0.85
+    mujoco.mj_forward(model, data)
+    default_joint_pos = data.qpos[nq_free:].copy()
+
+    policy_dt = model.opt.timestep * DECIMATION
     results = {}
 
     for force in forces:
         recoveries = 0
         recovery_times = []
 
-        push_start_step = int(push_time / dt)
-        push_end_step = int((push_time + push_duration) / dt)
-        total_steps = int(episode_duration / dt)
+        push_start_step = int(push_time / policy_dt)
+        push_end_step = int((push_time + push_duration) / policy_dt)
+        total_policy_steps = int(episode_duration / policy_dt)
 
         for trial in range(num_trials):
             mujoco.mj_resetData(model, data)
             data.qpos[2] = 0.85
+            mujoco.mj_forward(model, data)
 
-            pre_push_upright = True
             post_push_recovered = False
             fell = False
-            recovery_step = None
+            prev_actions = np.zeros(nu, dtype=np.float32)
 
-            for step in range(total_steps):
+            for step in range(total_policy_steps):
                 if policy is not None:
-                    obs = _get_obs(model, data)
+                    obs = _make_obs(model, data, default_joint_pos, nu, prev_actions)
                     action = policy(obs)
-                    data.ctrl[:len(action)] = action
+                    data.ctrl[:] = action
+                    prev_actions = action.copy()
                 else:
                     data.ctrl[:] = 0.0
 
                 # Apply lateral push
                 torso_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "torso")
                 if push_start_step <= step <= push_end_step:
-                    # Push in +y direction (lateral)
                     push_dir = 1.0 if trial % 2 == 0 else -1.0
                     data.xfrc_applied[torso_id, 1] = force * push_dir
                 else:
                     data.xfrc_applied[torso_id, :] = 0.0
 
-                mujoco.mj_step(model, data)
+                for _ in range(DECIMATION):
+                    mujoco.mj_step(model, data)
 
-                # Check if robot fell
                 if data.qpos[2] < 0.3:
                     fell = True
                     break
 
-                # Check recovery: torso returned to near-upright after push
                 if step > push_end_step and not post_push_recovered:
-                    # Check orientation (quaternion w component close to 1 = upright)
                     quat_w = data.qpos[3]
                     if abs(quat_w) > 0.95:
                         post_push_recovered = True
-                        recovery_step = step
-                        recovery_time = (step - push_end_step) * dt
+                        recovery_time = (step - push_end_step) * policy_dt
                         recovery_times.append(recovery_time)
 
             if not fell and post_push_recovered:
@@ -213,7 +217,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate payload and robustness")
     parser.add_argument("--all_models", action="store_true")
     parser.add_argument("--model", type=str, choices=["A", "B", "C"])
-    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--checkpoint_dir", type=str, default="results/checkpoints")
     parser.add_argument("--test", type=str, default="both", choices=["payload", "robustness", "both"])
     parser.add_argument("--masses", nargs="+", type=float, default=[0, 5, 10, 20])
     parser.add_argument("--forces", nargs="+", type=float, default=[50, 100, 150])
@@ -223,7 +227,6 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     models_to_eval = list(MODEL_CONFIGS.keys()) if args.all_models else [args.model]
-    policy = load_policy(args.checkpoint)
 
     all_results = {}
 
@@ -232,6 +235,17 @@ def main():
         print(f"\n{'='*60}")
         print(f"  Model {model_key}: {config['name']}")
         print(f"{'='*60}")
+
+        # Load policy
+        policy = None
+        ckpt = _find_checkpoint(args.checkpoint_dir, model_key)
+        if ckpt:
+            m = mujoco.MjModel.from_xml_path(config["xml"])
+            obs_dim = 3 + 3 + 3 + (m.nq - 7) + (m.nv - 6) + m.nu
+            policy = load_mjx_policy(ckpt, obs_dim, m.nu)
+            print(f"  Loaded: {ckpt}")
+        else:
+            print(f"  [WARN] No checkpoint for model {model_key}")
 
         model_results = {}
 
