@@ -1,0 +1,47 @@
+{
+  "Model_A": {
+    "name": "Forward Knee (Baseline)",
+    "cot_mean": 0.5422674670142973,
+    "cot_std": 0.39893955858912866,
+    "cot_min": 0.18836663407500806,
+    "cot_max": 2.0086442896419414,
+    "distance_mean": 0.05620942152376344,
+    "speed_mean": 0.3201493758310551,
+    "energy_mean": 588.3606312348122,
+    "success_rate": 0.64,
+    "total_mass": 22.839926097452423,
+    "payload_mass": 0.0,
+    "num_episodes": 50,
+    "num_actuators": 12
+  },
+  "Model_B": {
+    "name": "Reverse Knee (Ostrich)",
+    "cot_mean": 0.5615111166446789,
+    "cot_std": 1.087114158947289,
+    "cot_min": 0.1237231660241532,
+    "cot_max": 6.344545659923443,
+    "distance_mean": 4.262949990644165,
+    "speed_mean": 0.8066501111036812,
+    "energy_mean": 323.6216215288292,
+    "success_rate": 0.86,
+    "total_mass": 22.73992609745242,
+    "payload_mass": 0.0,
+    "num_episodes": 50,
+    "num_actuators": 10
+  },
+  "Model_C": {
+    "name": "Bidirectional Knee (Proposed)",
+    "cot_mean": 0.22328779606404217,
+    "cot_std": 0.06819440596801037,
+    "cot_min": 0.1396927431875243,
+    "cot_max": 0.5579149881595048,
+    "distance_mean": 1.8081816484450746,
+    "speed_mean": 1.1176093564931135,
+    "energy_mean": 83.82315245828322,
+    "success_rate": 1.0,
+    "total_mass": 22.916902483604645,
+    "payload_mass": 0.0,
+    "num_episodes": 50,
+    "num_actuators": 10
+  }
+}

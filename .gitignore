@@ -1,6 +1,6 @@
 # Results (generated at runtime)
 results/checkpoints/
-results/metrics/
+# results/metrics/ — evaluation results are tracked
 # results/videos/ — smoke test videos are tracked
 results/plots/
 
