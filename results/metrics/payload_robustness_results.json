@@ -1,0 +1,215 @@
+{
+  "Model_A": {
+    "name": "Forward Knee (Baseline)",
+    "payload": {
+      "0kg": {
+        "payload_mass": 0,
+        "total_mass": 22.839926097452423,
+        "success_rate": 0.05,
+        "distance_mean": -0.3985190897667252,
+        "distance_std": 5.4785995612321186,
+        "cot_mean": 0.626801147600929,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "5kg": {
+        "payload_mass": 5,
+        "total_mass": 27.839926097452423,
+        "success_rate": 0.0,
+        "distance_mean": 1.5098702861315434,
+        "distance_std": 0.0013270130891851954,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "10kg": {
+        "payload_mass": 10,
+        "total_mass": 32.83992609745243,
+        "success_rate": 0.05,
+        "distance_mean": 1.0385232520775032,
+        "distance_std": 3.967488822536515,
+        "cot_mean": 0.7804764317560978,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "20kg": {
+        "payload_mass": 20,
+        "total_mass": 42.83992609745242,
+        "success_rate": 0.0,
+        "distance_mean": 0.6203571050166601,
+        "distance_std": 0.00106460653720425,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      }
+    },
+    "robustness": {
+      "50N": {
+        "force_N": 50,
+        "push_duration_s": 0.1,
+        "recovery_rate": 1.0,
+        "recovery_time_mean": 3.3040000000000007,
+        "recovery_time_std": 0.5,
+        "num_trials": 30
+      },
+      "100N": {
+        "force_N": 100,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.0,
+        "recovery_time_mean": Infinity,
+        "recovery_time_std": 0.0,
+        "num_trials": 30
+      },
+      "150N": {
+        "force_N": 150,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.5,
+        "recovery_time_mean": 6.079999999999999,
+        "recovery_time_std": 8.881784197001252e-16,
+        "num_trials": 30
+      }
+    }
+  },
+  "Model_B": {
+    "name": "Reverse Knee (Ostrich)",
+    "payload": {
+      "0kg": {
+        "payload_mass": 0,
+        "total_mass": 22.73992609745242,
+        "success_rate": 0.0,
+        "distance_mean": 0.902124077291741,
+        "distance_std": 4.241326595246399,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "5kg": {
+        "payload_mass": 5,
+        "total_mass": 27.73992609745242,
+        "success_rate": 0.0,
+        "distance_mean": 0.9711666470087087,
+        "distance_std": 0.9591458615692255,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "10kg": {
+        "payload_mass": 10,
+        "total_mass": 32.739926097452425,
+        "success_rate": 0.0,
+        "distance_mean": 2.2066409575939665,
+        "distance_std": 0.20637244620230621,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "20kg": {
+        "payload_mass": 20,
+        "total_mass": 42.73992609745242,
+        "success_rate": 0.0,
+        "distance_mean": 0.2961703426885097,
+        "distance_std": 5.450561893065681e-15,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      }
+    },
+    "robustness": {
+      "50N": {
+        "force_N": 50,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.0,
+        "recovery_time_mean": Infinity,
+        "recovery_time_std": 0.0,
+        "num_trials": 30
+      },
+      "100N": {
+        "force_N": 100,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.0,
+        "recovery_time_mean": Infinity,
+        "recovery_time_std": 0.0,
+        "num_trials": 30
+      },
+      "150N": {
+        "force_N": 150,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.5,
+        "recovery_time_mean": 2.1000000000000005,
+        "recovery_time_std": 4.440892098500626e-16,
+        "num_trials": 30
+      }
+    }
+  },
+  "Model_C": {
+    "name": "Bidirectional Knee (Proposed)",
+    "payload": {
+      "0kg": {
+        "payload_mass": 0,
+        "total_mass": 22.916902483604645,
+        "success_rate": 0.0,
+        "distance_mean": 2.6913402279865934,
+        "distance_std": 1.0690702265995142,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "5kg": {
+        "payload_mass": 5,
+        "total_mass": 27.916902483604648,
+        "success_rate": 0.0,
+        "distance_mean": 2.5572689127392643,
+        "distance_std": 0.3013207683269648,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "10kg": {
+        "payload_mass": 10,
+        "total_mass": 32.91690248360465,
+        "success_rate": 0.0,
+        "distance_mean": 0.8048270790841736,
+        "distance_std": 2.424398241157984e-07,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      },
+      "20kg": {
+        "payload_mass": 20,
+        "total_mass": 42.91690248360464,
+        "success_rate": 0.0,
+        "distance_mean": 0.6528407595820827,
+        "distance_std": 1.6386123281829377e-13,
+        "cot_mean": Infinity,
+        "cot_std": 0.0,
+        "num_trials": 20
+      }
+    },
+    "robustness": {
+      "50N": {
+        "force_N": 50,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.0,
+        "recovery_time_mean": Infinity,
+        "recovery_time_std": 0.0,
+        "num_trials": 30
+      },
+      "100N": {
+        "force_N": 100,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.0,
+        "recovery_time_mean": Infinity,
+        "recovery_time_std": 0.0,
+        "num_trials": 30
+      },
+      "150N": {
+        "force_N": 150,
+        "push_duration_s": 0.1,
+        "recovery_rate": 0.0,
+        "recovery_time_mean": Infinity,
+        "recovery_time_std": 0.0,
+        "num_trials": 30
+      }
+    }
+  }
+}
